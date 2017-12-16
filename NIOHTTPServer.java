@@ -1,5 +1,5 @@
-import javafx.util.converter.ByteStringConverter;
-
+import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
@@ -13,14 +13,14 @@ public class NIOHTTPServer {
     public static void main(String[] args) throws Exception {
         Selector selector = Selector.open();
         ServerSocketChannel server = ServerSocketChannel.open();
-        server.socket().bind(new java.net.InetSocketAddress(8081));
+        InetSocketAddress address = new InetSocketAddress(8081);
+        server.socket().bind(address);
         System.out.println("Listening for connection on port 8081 ....");
 
         server.configureBlocking(false);
+        server.register(selector, SelectionKey.OP_ACCEPT);
 
-        SelectionKey serverKey = server.register(selector, SelectionKey.OP_ACCEPT);
-
-        while(true) {
+        while (true) {
             selector.select();
             System.out.println("New connection");
 
@@ -30,43 +30,47 @@ public class NIOHTTPServer {
                 SelectionKey key = (SelectionKey) i.next();
                 i.remove();
 
-                if (key == serverKey) {
-                    if (key.isAcceptable()) {
-                        SocketChannel client = server.accept();
-                        if (client == null)
-                            continue;
-                        client.configureBlocking(false);
-                        client.register(selector, SelectionKey.OP_READ);
-                    }
-                } else {
-                    SocketChannel client = (SocketChannel) key.channel();
-                    if (!key.isReadable())
-                        continue;
-                    ByteBuffer byteBuffer = ByteBuffer.allocate(1024);
-
-                    client.read(byteBuffer);
-                    byteBuffer.flip();
-
-                    System.out.println("done with reading");
-                    System.out.println(new String(byteBuffer.array(), "UTF-8"));
-                    Thread.sleep(5 * 1000);
-                    System.out.println("back from sleep");
-                    byteBuffer.clear();
-
-
-                    Date today = new Date();
-                    String httpResponse = "HTTP/1.1 200 OK\r\n\r\n" + today;
-                    byte[] responseBytes = httpResponse.getBytes();
-                    ByteBuffer res = ByteBuffer.wrap(responseBytes);
-                    System.out.println("writing response");
-                    while (res.hasRemaining()) {
-                        client.write(res);
-                    }
-                    System.out.println("response written");
-                    client.close();
-                    key.cancel();
+                if (key.isAcceptable()) {
+                    acceptNewRequest(selector, server);
+                } else if (key.isReadable()) {
+                    readDataFromClient(selector, key);
+                } else if (key.isWritable()) {
+                    writeDataToClient(key);
                 }
             }
         }
+    }
+
+    private static void writeDataToClient(SelectionKey key) throws IOException {
+        SocketChannel client = (SocketChannel) key.channel();
+        Date today = new Date();
+        String httpResponse = "HTTP/1.1 200 OK\r\n\r\n" + today;
+        byte[] responseBytes = httpResponse.getBytes();
+        ByteBuffer res = ByteBuffer.wrap(responseBytes);
+        System.out.println("writing response");
+        while (res.hasRemaining()) {
+            client.write(res);
+        }
+        System.out.println("response written");
+        client.close();
+        key.cancel();
+    }
+
+    private static void readDataFromClient(Selector selector, SelectionKey key) throws IOException {
+        SocketChannel client = (SocketChannel) key.channel();
+        ByteBuffer byteBuffer = ByteBuffer.allocate(1024);
+
+        client.read(byteBuffer);
+        String request = new String(byteBuffer.array(), "UTF-8");
+        System.out.println(request);
+        byteBuffer.clear();
+        System.out.println("done with reading");
+        client.register(selector, SelectionKey.OP_WRITE, request);
+    }
+
+    private static void acceptNewRequest(Selector selector, ServerSocketChannel server) throws IOException {
+        SocketChannel client = server.accept();
+        client.configureBlocking(false);
+        client.register(selector, SelectionKey.OP_READ);
     }
 }
